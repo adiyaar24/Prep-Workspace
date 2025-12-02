@@ -18,85 +18,13 @@ import logging
 import os
 import sys
 import time
-import traceback
 import urllib.request
 import urllib.error
 import subprocess
 import socket
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 import re
-
-
-class DebugManager:
-    """Advanced debugging and performance monitoring manager."""
-    
-    def __init__(self, logger: Optional[logging.Logger] = None, debug_mode: bool = False):
-        self.logger = logger or logging.getLogger(__name__)
-        self.debug_mode = debug_mode
-        self.performance_logs: List[Dict[str, Any]] = []
-        self.error_context: Dict[str, Any] = {}
-        self.operation_stack: List[str] = []
-        
-    def start_operation(self, operation: str) -> float:
-        """Start timing an operation."""
-        start_time = time.time()
-        self.operation_stack.append(operation)
-        if self.debug_mode:
-            self.logger.debug(f"🚀 Starting operation: {operation}")
-        return start_time
-        
-    def end_operation(self, operation: str, start_time: float, metadata: Dict[str, Any] = None) -> float:
-        """End timing an operation and log performance."""
-        end_time = time.time()
-        duration = end_time - start_time
-        
-        if self.operation_stack and self.operation_stack[-1] == operation:
-            self.operation_stack.pop()
-            
-        perf_data = {
-            'operation': operation,
-            'duration_ms': round(duration * 1000, 2),
-            'start_time': start_time,
-            'end_time': end_time,
-            'metadata': metadata or {}
-        }
-        self.performance_logs.append(perf_data)
-        
-        if self.debug_mode:
-            self.logger.debug(f"✅ Completed operation: {operation} ({perf_data['duration_ms']}ms)")
-            if metadata:
-                self.logger.debug(f"📊 Metadata: {json.dumps(metadata, indent=2)}")
-                
-        return duration
-    
-    def set_error_context(self, key: str, value: Any):
-        """Set context information for error debugging."""
-        self.error_context[key] = value
-        if self.debug_mode:
-            self.logger.debug(f"🔍 Context: {key}={value}")
-    
-    def log_debug_summary(self):
-        """Log comprehensive debug summary."""
-        if not self.debug_mode:
-            return
-            
-        total_operations = len(self.performance_logs)
-        total_time = sum(log['duration_ms'] for log in self.performance_logs)
-        
-        self.logger.debug("🔍 === DEBUG SUMMARY ===")
-        self.logger.debug(f"📊 Total Operations: {total_operations}")
-        self.logger.debug(f"⏱️  Total Execution Time: {round(total_time, 2)}ms")
-        if total_operations > 0:
-            self.logger.debug(f"📈 Average Operation Time: {round(total_time / total_operations, 2)}ms")
-        
-        if self.error_context:
-            self.logger.debug("🔍 Error Context:")
-            for key, value in self.error_context.items():
-                self.logger.debug(f"  {key}: {value}")
-                
-        if self.operation_stack:
-            self.logger.debug(f"⚠️  Incomplete Operations: {', '.join(self.operation_stack)}")
 
 
 class EnhancedLogger:
@@ -105,7 +33,6 @@ class EnhancedLogger:
     def __init__(self, name: str = __name__, debug_mode: bool = False):
         self.debug_mode = debug_mode
         self.logger = self._setup_logging(name)
-        self.debug_manager = DebugManager(self.logger, debug_mode)
         
     def _setup_logging(self, name: str) -> logging.Logger:
         """Setup enhanced logging with color coding."""
@@ -218,8 +145,6 @@ class DroneOutputManager:
         
     def add_output(self, key: str, value: str) -> None:
         """Add output with validation and drone integration."""
-        start_time = self.logger.debug_manager.start_operation(f"add_output_{key}")
-        
         try:
             # Enhanced validation
             if not key or not isinstance(key, str):
@@ -242,104 +167,43 @@ class DroneOutputManager:
             
             truncated_value = value[:50] + '...' if len(value) > 50 else value
             self.logger.info(f"📤 EXPORTED: {key}={truncated_value}")
-            
-            # Debug context
-            self.logger.debug_manager.set_error_context(f"last_output_key", key)
-            self.logger.debug_manager.set_error_context(f"last_output_length", len(value))
                 
         except Exception as e:
             error_msg = f"Failed to add output {key}: {e}"
             self.logger.error(error_msg)
-            self.logger.debug_manager.set_error_context("add_output_error", str(e))
             raise ValueError(error_msg)
-        
-        finally:
-            self.logger.debug_manager.end_operation(f"add_output_{key}", start_time, 
-                                                  {"key": key, "value_length": len(str(value))})
     
-    def write_drone_outputs(self) -> bool:
-        """Write outputs to drone environment files."""
-        start_time = self.logger.debug_manager.start_operation("write_drone_outputs")
-        
+    def write_drone_outputs(self) -> None:
+        """Write outputs to drone output file if available."""
         if not self.outputs:
-            self.logger.info("ℹ️  No outputs to write to drone files")
-            return True
+            self.logger.info("No outputs to write")
+            return
             
-        drone_files = [
-            os.environ.get('DRONE_OUTPUT'),
-            os.environ.get('DRONE_STEP_ENV'), 
-            '/drone/src/output.env',
-            '/tmp/drone_outputs.env'  # Fallback location
-        ]
-        
-        success_count = 0
-        
-        for drone_file in drone_files:
-            if not drone_file:
-                continue
-                
+        # Write to drone output file if available
+        drone_output_file = os.environ.get('DRONE_OUTPUT')
+        if drone_output_file:
             try:
-                drone_path = Path(drone_file)
-                drone_path.parent.mkdir(parents=True, exist_ok=True)
+                Path(drone_output_file).parent.mkdir(parents=True, exist_ok=True)
                 
-                with open(drone_file, 'a') as f:
+                with open(drone_output_file, 'a') as f:
                     for key, value in self.outputs.items():
-                        # Escape special characters
-                        escaped_value = value.replace('"', '\\"').replace('$', '\\$')
-                        f.write(f"{key}=\"{escaped_value}\"\n")
-                
-                success_count += 1
-                self.logger.info(f"✅ Wrote {len(self.outputs)} outputs to: {drone_file}")
+                        f.write(f"{key}={value}\n")
+                self.logger.debug(f"✅ Wrote {len(self.outputs)} outputs to {drone_output_file}")
                 
             except Exception as e:
-                self.logger.warning(f"Failed to write drone file {drone_file}: {e}")
-                self.logger.debug_manager.set_error_context(f"drone_file_error_{drone_file}", str(e))
-        
-        self.logger.debug_manager.end_operation("write_drone_outputs", start_time, 
-                                              {"files_written": success_count, "total_outputs": len(self.outputs)})
-        
-        return success_count > 0
+                self.logger.debug(f"Failed to write to DRONE_OUTPUT file {drone_output_file}: {e}")
+                # Don't raise exception for debug file write failures
     
     def finalize_outputs(self) -> None:
-        """Finalize all outputs with validation."""
-        try:
-            # Write to drone files
-            self.write_drone_outputs()
-            
-            # Validate outputs
-            self._validate_outputs()
-            
-            self.logger.info(f"🎯 Generated {len(self.outputs)} output variables")
-            
-            if self.logger.debug_mode:
-                self._log_output_summary()
-                
-        except Exception as e:
-            self.logger.error(f"Failed to finalize outputs: {e}")
-            raise
+        """Finalize all outputs."""
+        # Write to drone file
+        self.write_drone_outputs()
+        
+        self.logger.info(f"🎯 Generated {len(self.outputs)} output variables")
     
-    def _validate_outputs(self) -> bool:
-        """Validate all outputs for consistency."""
-        try:
-            for key, value in self.outputs.items():
-                if key not in os.environ or os.environ[key] != value:
-                    self.logger.warning(f"Output validation failed for {key}")
-                    return False
-            
-            self.logger.debug("✅ All outputs validated successfully")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Output validation error: {e}")
-            return False
-    
-    def _log_output_summary(self):
-        """Log detailed output summary for debugging."""
-        self.logger.debug("📋 === OUTPUT SUMMARY ===")
-        for key, value in self.outputs.items():
-            truncated = value[:100] + '...' if len(value) > 100 else value
-            self.logger.debug(f"  {key}: {truncated}")
-        self.logger.debug(f"📊 Total outputs: {len(self.outputs)}")
+    def get_summary(self) -> Dict[str, str]:
+        """Get a summary of all outputs."""
+        return self.outputs.copy()
 
 
 # Initialize enhanced logger
@@ -350,8 +214,6 @@ output_manager = DroneOutputManager(logger)
 
 def safe_json_parse(json_str: str, config_name: str) -> Any:
     """Enhanced JSON parsing with comprehensive error handling and validation."""
-    start_time = logger.debug_manager.start_operation(f"parse_{config_name}")
-    
     try:
         if not json_str or json_str.strip() == '':
             logger.warning(f"📄 {config_name} is empty, returning empty dict")
@@ -375,14 +237,6 @@ def safe_json_parse(json_str: str, config_name: str) -> Any:
         return config
         
     except json.JSONDecodeError as e:
-        error_context = {
-            'config_name': config_name,
-            'error_line': getattr(e, 'lineno', 'unknown'),
-            'error_column': getattr(e, 'colno', 'unknown'),
-            'json_preview': json_str[:200] + '...' if len(json_str) > 200 else json_str
-        }
-        logger.debug_manager.set_error_context('json_parse_error', error_context)
-        
         logger.error(f"❌ Failed to parse {config_name}: {e}")
         logger.error(f"📄 Invalid JSON content (line {e.lineno}, col {e.colno}): {json_str[:200]}...")
         
@@ -399,13 +253,8 @@ def safe_json_parse(json_str: str, config_name: str) -> Any:
         raise ValueError(f"Invalid JSON in {config_name}: {e}")
         
     except Exception as e:
-        logger.debug_manager.set_error_context('unexpected_json_error', str(e))
         logger.error(f"❌ Unexpected error parsing {config_name}: {e}")
         raise ValueError(f"Unexpected error parsing {config_name}: {e}")
-        
-    finally:
-        logger.debug_manager.end_operation(f"parse_{config_name}", start_time, 
-                                          {'config_name': config_name, 'size_chars': len(json_str)})
 
 
 def export_env_var(name: str, value: str) -> None:
@@ -590,8 +439,8 @@ def process_delete_action(component_name_list: str, iteration: int) -> None:
         # Export environment variables
         logger.info("")
         logger.info("Exporting environment variables:")
-        export_env_var('RESOURCE_NAME', current_component)
-        export_env_var('ENTITY_ID', current_component)
+        export_env_var('resourceName', current_component)
+        export_env_var('entityId', current_component)
         
     except Exception as e:
         logger.error(f"Error processing 'delete' action: {e}", exc_info=True)
@@ -653,13 +502,13 @@ def process_update_action(component_name_list: str, iteration: int, repeat_item:
         # Export environment variables
         logger.info("")
         logger.info("Exporting environment variables:")
-        export_env_var('RESOURCE_NAME', current_component)
-        export_env_var('ENTITY_ID', current_component)
-        export_env_var('WORKSPACE_NAME', repeat_item)
-        export_env_var('ASSET_ID', asset_id)
-        export_env_var('TERRAFORM_VARS', terraform_vars_json)
-        export_env_var('CONNECTOR', connector)
-        export_env_var('MODULE_NAME', module_name)
+        export_env_var('resourceName', current_component)
+        export_env_var('entityId', current_component)
+        export_env_var('workspaceName', repeat_item)
+        export_env_var('assetId', asset_id)
+        export_env_var('terraformVars', terraform_vars_json)
+        export_env_var('connector', connector)
+        export_env_var('moduleName', module_name)
         
     except Exception as e:
         logger.error(f"Error processing 'update' action: {e}", exc_info=True)
@@ -710,11 +559,8 @@ def process_create_action(repeat_item: str, item_map_str: str, asset_id: str,
         filtered_terraform_vars = {k: v for k, v in workspace_vars.items() 
                                    if k not in ['module_name', 'connector', 'type', 'show_advanced']}
         
-        # Fetch tags from API
-        tags_map = fetch_tags_from_api(asset_id, api_url)
-        
-        # Add tags to terraform vars
-        filtered_terraform_vars['cdk_std_tags'] = tags_map
+        # Fetch tags from API and add to terraform vars
+        filtered_terraform_vars['cdk_std_tags'] = fetch_tags_from_api(asset_id, api_url)
         
         terraform_vars_json = json.dumps(filtered_terraform_vars, separators=(',', ':'))
         logger.info(f"Final terraform vars: {terraform_vars_json[:200]}...")
@@ -732,13 +578,13 @@ def process_create_action(repeat_item: str, item_map_str: str, asset_id: str,
         # Export environment variables
         logger.info("")
         logger.info("Exporting environment variables:")
-        export_env_var('WORKSPACE_NAME', repeat_item)
-        export_env_var('ASSET_ID', asset_id)
-        export_env_var('TERRAFORM_VARS', terraform_vars_json)
-        export_env_var('CONNECTOR', connector)
-        export_env_var('MODULE_NAME', module_name)
-        export_env_var('RESOURCE_NAME', resource_name_normalized)
-        export_env_var('ENTITY_ID', entity_id_normalized)
+        export_env_var('workspaceName', repeat_item)
+        export_env_var('assetId', asset_id)
+        export_env_var('terraformVars', terraform_vars_json)
+        export_env_var('connector', connector)
+        export_env_var('moduleName', module_name)
+        export_env_var('resourceName', resource_name_normalized)
+        export_env_var('entityId', entity_id_normalized)
         
     except Exception as e:
         logger.error(f"Error processing 'create' action: {e}", exc_info=True)
@@ -748,7 +594,7 @@ def process_create_action(repeat_item: str, item_map_str: str, asset_id: str,
 def main():
     """Enhanced main execution function with comprehensive error handling and monitoring."""
     exit_code = 0
-    execution_start = logger.debug_manager.start_operation("main_execution")
+    execution_start = time.time()
     
     try:
         # Print enhanced startup banner
@@ -763,142 +609,151 @@ def main():
             logger.debug(f"📁 Working Directory: {os.getcwd()}")
             logger.debug(f"🌍 Environment Variables: {len(os.environ)} total")
         
-        # Read and validate Harness pipeline variables
-        logger.info("📋 Reading Harness pipeline variables...")
+        # Read and validate plugin configuration from PLUGIN_ environment variables
+        logger.info("📋 Reading plugin configuration...")
         
-        action = os.environ.get('action', '<+pipeline.variables.action>')
+        # Validate required action variable
+        action = os.environ.get('PLUGIN_ACTION')
+        if not action:
+            raise ValueError("PLUGIN_ACTION environment variable is required")
+            
         logger.info(f"🎬 Workspace Preparation Action: {action}")
         
         # Validate action
         valid_actions = ['create', 'update', 'delete']
-        if action not in valid_actions and not action.startswith('<+'):
+        if action not in valid_actions:
             raise ValueError(f"Invalid action '{action}'. Must be one of: {valid_actions}")
         
-        logger.debug_manager.set_error_context("current_action", action)
+        # Validate required common variables
+        org_identifier = os.environ.get('PLUGIN_ORG_IDENTIFIER')
+        project_identifier = os.environ.get('PLUGIN_PROJECT_IDENTIFIER')
+        resource_owner = os.environ.get('PLUGIN_RESOURCE_OWNER')
         
-        # Common variables with fallback to environment
-        org_identifier = os.environ.get('org_identifier', '<+org.identifier>')
-        project_identifier = os.environ.get('project_identifier', '<+project.identifier>')
-        resource_owner = os.environ.get('resource_owner', 
-            '<+pipeline.stages.Create_Deployment.spec.execution.steps.Prep_Stage.output.outputVariables.RESOURCE_OWNER>')
+        if not org_identifier:
+            raise ValueError("PLUGIN_ORG_IDENTIFIER environment variable is required")
+        if not project_identifier:
+            raise ValueError("PLUGIN_PROJECT_IDENTIFIER environment variable is required")
+        if not resource_owner:
+            raise ValueError("PLUGIN_RESOURCE_OWNER environment variable is required")
         
         logger.debug(f"🏢 Organization: {org_identifier}")
         logger.debug(f"📁 Project: {project_identifier}")
         logger.debug(f"👤 Resource Owner: {resource_owner[:50]}{'...' if len(resource_owner) > 50 else ''}")
         
         # API endpoint with validation
-        api_url = os.environ.get('api_url', "https://svc-pangea-api-nginx.int.nebula-dit.connectcdk.com/api/projects")
+        api_url = os.environ.get('PLUGIN_API_URL', "https://svc-pangea-api-nginx.int.nebula-dit.connectcdk.com/api/projects")
         logger.debug(f"🌐 API URL: {api_url}")
         
-        # Process based on action with enhanced error handling
+        # Process based on action with validation
         logger.info(f"⚙️  Processing '{action}' action workflow...")
-        action_start = logger.debug_manager.start_operation(f"process_{action}_action")
         
-        try:
-            if action == "delete":
-                component_name = os.environ.get('component_name', '<+pipeline.variables.component_name>')
-                iteration_str = os.environ.get('iteration', '<+strategy.iteration>')
-                
-                try:
-                    iteration = int(iteration_str) if iteration_str.isdigit() else int(iteration_str)
-                except (ValueError, TypeError):
-                    if iteration_str.startswith('<+'):
-                        # Harness expression, will be resolved at runtime
-                        iteration = 0  # Default for testing
-                        logger.debug("🔍 Using default iteration for Harness expression")
-                    else:
-                        raise ValueError(f"Invalid iteration value: {iteration_str}")
-                
-                process_delete_action(
-                    component_name_list=component_name,
-                    iteration=iteration
-                )
-                
-            elif action == "update":
-                component_name = os.environ.get('component_name', '<+pipeline.variables.component_name>')
-                iteration_str = os.environ.get('iteration', '<+strategy.iteration>')
-                repeat_item = os.environ.get('repeat_item', '<+repeat.item>')
-                asset_id = os.environ.get('asset_id', '<+pipeline.variables.asset_id>')
-                resource_config = os.environ.get('resource_config',
-                    '<+pipeline.stages.Create_Deployment.spec.execution.steps.Prep_Stage.output.outputVariables.RESOURCE_CONFIG>')
-                cloud_project = os.environ.get('cloud_project', '<+pipeline.variables.cloud_project>')
-                
-                try:
-                    iteration = int(iteration_str) if iteration_str.isdigit() else int(iteration_str)
-                except (ValueError, TypeError):
-                    if iteration_str.startswith('<+'):
-                        iteration = 0
-                        logger.debug("🔍 Using default iteration for Harness expression")
-                    else:
-                        raise ValueError(f"Invalid iteration value: {iteration_str}")
-                
-                process_update_action(
-                    component_name_list=component_name,
-                    iteration=iteration,
-                    repeat_item=repeat_item,
-                    asset_id=asset_id,
-                    resource_config_str=resource_config,
-                    cloud_project=cloud_project,
-                    api_url=api_url
-                )
-                
-            else:  # create action (default)
-                repeat_item = os.environ.get('repeat_item', '<+repeat.item>')
-                item_map = os.environ.get('item_map',
-                    '<+pipeline.stages.Create_Deployment.spec.execution.steps.Prep_Stage.output.outputVariables.item_map>')
-                asset_id = os.environ.get('asset_id', '<+pipeline.variables.asset_id>')
-                cloud_project = os.environ.get('cloud_project', '<+pipeline.variables.cloud_project>')
-                deployment_name = os.environ.get('deployment_name',
-                    '<+pipeline.stages.Create_Deployment.spec.execution.steps.Prep_Stage.output.outputVariables.DEPLOYMENT_NAME>')
-                iteration_str = os.environ.get('iteration', '<+strategy.iteration>')
-                
-                try:
-                    iteration = int(iteration_str) if iteration_str.isdigit() else int(iteration_str)
-                except (ValueError, TypeError):
-                    if iteration_str.startswith('<+'):
-                        iteration = 0
-                        logger.debug("🔍 Using default iteration for Harness expression")
-                    else:
-                        raise ValueError(f"Invalid iteration value: {iteration_str}")
-                
-                process_create_action(
-                    repeat_item=repeat_item,
-                    item_map_str=item_map,
-                    asset_id=asset_id,
-                    cloud_project=cloud_project,
-                    deployment_name=deployment_name,
-                    iteration=iteration,
-                    api_url=api_url
-                )
+        if action == "delete":
+            component_name = os.environ.get('PLUGIN_COMPONENT_NAME')
+            iteration_str = os.environ.get('PLUGIN_ITERATION')
+            
+            if not component_name:
+                raise ValueError("PLUGIN_COMPONENT_NAME environment variable is required for delete action")
+            if not iteration_str:
+                raise ValueError("PLUGIN_ITERATION environment variable is required for delete action")
+            
+            try:
+                iteration = int(iteration_str)
+            except (ValueError, TypeError):
+                raise ValueError(f"PLUGIN_ITERATION must be a valid integer, got: {iteration_str}")
+            
+            process_delete_action(
+                component_name_list=component_name,
+                iteration=iteration
+            )
+            
+        elif action == "update":
+            component_name = os.environ.get('PLUGIN_COMPONENT_NAME')
+            iteration_str = os.environ.get('PLUGIN_ITERATION')
+            repeat_item = os.environ.get('PLUGIN_REPEAT_ITEM')
+            asset_id = os.environ.get('PLUGIN_ASSET_ID')
+            resource_config = os.environ.get('PLUGIN_RESOURCE_CONFIG')
+            cloud_project = os.environ.get('PLUGIN_CLOUD_PROJECT')
+            
+            if not component_name:
+                raise ValueError("PLUGIN_COMPONENT_NAME environment variable is required for update action")
+            if not iteration_str:
+                raise ValueError("PLUGIN_ITERATION environment variable is required for update action")
+            if not repeat_item:
+                raise ValueError("PLUGIN_REPEAT_ITEM environment variable is required for update action")
+            if not asset_id:
+                raise ValueError("PLUGIN_ASSET_ID environment variable is required for update action")
+            if not resource_config:
+                raise ValueError("PLUGIN_RESOURCE_CONFIG environment variable is required for update action")
+            if not cloud_project:
+                raise ValueError("PLUGIN_CLOUD_PROJECT environment variable is required for update action")
+            
+            try:
+                iteration = int(iteration_str)
+            except (ValueError, TypeError):
+                raise ValueError(f"PLUGIN_ITERATION must be a valid integer, got: {iteration_str}")
+            
+            process_update_action(
+                component_name_list=component_name,
+                iteration=iteration,
+                repeat_item=repeat_item,
+                asset_id=asset_id,
+                resource_config_str=resource_config,
+                cloud_project=cloud_project,
+                api_url=api_url
+            )
+            
+        else:  # create action
+            repeat_item = os.environ.get('PLUGIN_REPEAT_ITEM')
+            item_map = os.environ.get('PLUGIN_ITEM_MAP')
+            asset_id = os.environ.get('PLUGIN_ASSET_ID')
+            cloud_project = os.environ.get('PLUGIN_CLOUD_PROJECT')
+            deployment_name = os.environ.get('PLUGIN_DEPLOYMENT_NAME')
+            iteration_str = os.environ.get('PLUGIN_ITERATION')
+            
+            if not repeat_item:
+                raise ValueError("PLUGIN_REPEAT_ITEM environment variable is required for create action")
+            if not item_map:
+                raise ValueError("PLUGIN_ITEM_MAP environment variable is required for create action")
+            if not asset_id:
+                raise ValueError("PLUGIN_ASSET_ID environment variable is required for create action")
+            if not cloud_project:
+                raise ValueError("PLUGIN_CLOUD_PROJECT environment variable is required for create action")
+            if not deployment_name:
+                raise ValueError("PLUGIN_DEPLOYMENT_NAME environment variable is required for create action")
+            if not iteration_str:
+                raise ValueError("PLUGIN_ITERATION environment variable is required for create action")
+            
+            try:
+                iteration = int(iteration_str)
+            except (ValueError, TypeError):
+                raise ValueError(f"PLUGIN_ITERATION must be a valid integer, got: {iteration_str}")
+            
+            process_create_action(
+                repeat_item=repeat_item,
+                item_map_str=item_map,
+                asset_id=asset_id,
+                cloud_project=cloud_project,
+                deployment_name=deployment_name,
+                iteration=iteration,
+                api_url=api_url
+            )
         
-        finally:
-            logger.debug_manager.end_operation(f"process_{action}_action", action_start)
-        
-        # Export common variables with enhanced validation
+        # Export common variables with camelCase naming
         logger.info("📤 Exporting common environment variables...")
-        common_start = logger.debug_manager.start_operation("export_common_variables")
         
-        try:
-            entity_scope = f"account.{org_identifier}.{project_identifier}"
-            entity_id = os.environ.get('ENTITY_ID', '')
-            entity_ref = f"{entity_scope}/{entity_id}" if entity_id else entity_scope
-            
-            export_env_var('RESOURCE_OWNER', resource_owner)
-            export_env_var('ENTITY_SCOPE', entity_scope)
-            export_env_var('ENTITY_REF', entity_ref)
-            
-            logger.info(f"🔗 Entity Reference: {entity_ref}")
-            
-        finally:
-            logger.debug_manager.end_operation("export_common_variables", common_start)
+        entity_scope = f"account.{org_identifier}.{project_identifier}"
+        entity_id = os.environ.get('entityId', '')
+        entity_ref = f"{entity_scope}/{entity_id}" if entity_id else entity_scope
+        
+        export_env_var('resourceOwner', resource_owner)
+        export_env_var('entityScope', entity_scope)
+        export_env_var('entityRef', entity_ref)
+        
+        logger.info(f"🔗 Entity Reference: {entity_ref}")
         
         # Finalize all outputs
         logger.info("🎯 Finalizing outputs...")
         output_manager.finalize_outputs()
-        
-        # Log performance summary in debug mode
-        if logger.debug_mode:
-            logger.debug_manager.log_debug_summary()
         
         # Success banner
         logger.info("✅ " + "=" * 68)
@@ -926,16 +781,11 @@ def main():
         
         if logger.debug_mode:
             logger.error("🔍 Full traceback:", exc_info=True)
-            logger.debug_manager.log_debug_summary()
-        
-        # Set error context for debugging
-        logger.debug_manager.set_error_context("fatal_error", str(e))
-        logger.debug_manager.set_error_context("error_type", type(e).__name__)
         
         exit_code = 1
     
     finally:
-        execution_duration = logger.debug_manager.end_operation("main_execution", execution_start)
+        execution_duration = time.time() - execution_start
         logger.info(f"⏱️  Total execution time: {round(execution_duration * 1000, 2)}ms")
     
     return exit_code
