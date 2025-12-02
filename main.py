@@ -286,20 +286,16 @@ def export_env_var(name: str, value: str) -> None:
             
     except Exception as e:
         logger.error(f"❌ Failed to export variable {name}: {e}")
-        logger.debug_manager.set_error_context('export_error', {'name': name, 'error': str(e)})
         raise ValueError(f"Failed to export {name}: {e}")
 
 
 def fetch_tags_from_api(asset_id: str, api_url: str, retry_attempts: int = 3) -> Dict[str, str]:
     """Enhanced API tag fetching with retries, comprehensive error handling, and monitoring."""
-    start_time = logger.debug_manager.start_operation("fetch_api_tags")
-    
     if not asset_id or not asset_id.strip():
         logger.warning("⚠️  Asset ID is empty, skipping API call")
         return {}
         
     logger.info(f"🌐 Fetching tags for asset_id: {asset_id}")
-    logger.debug_manager.set_error_context("current_asset_id", asset_id)
     
     for attempt in range(retry_attempts):
         try:
@@ -360,7 +356,6 @@ def fetch_tags_from_api(asset_id: str, api_url: str, retry_attempts: int = 3) ->
                         return {}
                 else:
                     logger.error(f"❌ API returned status code: {response.status}")
-                    logger.debug_manager.set_error_context("api_status_code", response.status)
                     
                     # Try to read error response
                     try:
@@ -373,7 +368,6 @@ def fetch_tags_from_api(asset_id: str, api_url: str, retry_attempts: int = 3) ->
                     
         except urllib.error.HTTPError as e:
             logger.error(f"❌ HTTP Error (attempt {attempt + 1}/{retry_attempts}): {e.code} - {e.reason}")
-            logger.debug_manager.set_error_context("http_error", f"{e.code} - {e.reason}")
             
             # Don't retry on client errors (4xx)
             if 400 <= e.code < 500:
@@ -382,19 +376,15 @@ def fetch_tags_from_api(asset_id: str, api_url: str, retry_attempts: int = 3) ->
                 
         except urllib.error.URLError as e:
             logger.error(f"❌ Network Error (attempt {attempt + 1}/{retry_attempts}): {e.reason}")
-            logger.debug_manager.set_error_context("network_error", str(e.reason))
             
         except json.JSONDecodeError as e:
             logger.error(f"❌ JSON Parse Error (attempt {attempt + 1}/{retry_attempts}): {e}")
-            logger.debug_manager.set_error_context("json_error", str(e))
             
         except socket.timeout:
             logger.error(f"❌ Request timeout (attempt {attempt + 1}/{retry_attempts})")
-            logger.debug_manager.set_error_context("timeout_error", "30s timeout exceeded")
             
         except Exception as e:
             logger.error(f"❌ Unexpected error (attempt {attempt + 1}/{retry_attempts}): {e}")
-            logger.debug_manager.set_error_context("unexpected_api_error", str(e))
             
             if logger.debug_mode:
                 logger.error("🔍 Full traceback:", exc_info=True)
@@ -406,8 +396,6 @@ def fetch_tags_from_api(asset_id: str, api_url: str, retry_attempts: int = 3) ->
             time.sleep(wait_time)
     
     logger.warning(f"⚠️  Failed to fetch tags after {retry_attempts} attempts, returning empty dict")
-    logger.debug_manager.end_operation("fetch_api_tags", start_time, 
-                                      {"asset_id": asset_id, "attempts": retry_attempts, "success": False})
     return {}
 
 def normalize_name(name: str) -> str:
@@ -486,18 +474,18 @@ def process_update_action(component_name_list: str, iteration: int, repeat_item:
         
         # Extract values from workspace vars
         module_name = workspace_vars.get('module_name', '')
-        resource_name = workspace_vars.get('resource_name', '')
-        resource_type = workspace_vars.get('type', '')
         
         # Filter terraform vars - remove specific keys
         filtered_terraform_vars = {k: v for k, v in workspace_vars.items() 
                                    if k not in ['module_name', 'cloud_project', 'type', 'show_advanced']}
         
+        # Fetch tags from API and add to terraform vars
+        tags_map = fetch_tags_from_api(asset_id, api_url)
+        if tags_map:
+            filtered_terraform_vars['cdk_std_tags'] = tags_map
+        
         terraform_vars_json = json.dumps(filtered_terraform_vars, separators=(',', ':'))
         logger.info(f"Filtered terraform vars: {terraform_vars_json[:200]}...")
-        
-        # Fetch tags from API
-        tags_map = fetch_tags_from_api(asset_id, api_url)
         
         # Export environment variables
         logger.info("")
@@ -560,7 +548,9 @@ def process_create_action(repeat_item: str, item_map_str: str, asset_id: str,
                                    if k not in ['module_name', 'connector', 'type', 'show_advanced']}
         
         # Fetch tags from API and add to terraform vars
-        filtered_terraform_vars['cdk_std_tags'] = fetch_tags_from_api(asset_id, api_url)
+        tags_map = fetch_tags_from_api(asset_id, api_url)
+        if tags_map:
+            filtered_terraform_vars['cdk_std_tags'] = tags_map
         
         terraform_vars_json = json.dumps(filtered_terraform_vars, separators=(',', ':'))
         logger.info(f"Final terraform vars: {terraform_vars_json[:200]}...")
