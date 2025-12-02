@@ -1,0 +1,4 @@
+.env
+drone_output.txt
+harness_output_secret.txt
+test_variables.sh
