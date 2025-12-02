@@ -146,10 +146,6 @@ Removes workspace configurations by component name.
 
 The plugin integrates with Pangea API to fetch project tags:
 
-**API Endpoint:**
-```
-https://svc-pangea-api-nginx.int.nebula-dit.connectcdk.com/api/projects?asset_id=<asset_id>
-```
 
 **Features:**
 - Automatic tag fetching and integration
